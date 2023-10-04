@@ -4,3 +4,5 @@
 This code and using one of this boards (ESP8266 or ESP32) I can connect to the internet (NTP and geolocalization by IP) and get all the necessary data for creating the same NMEA GPS sentences (spoof or fake them) and send them through the serial port pins of the ESP connected to the GPS pins on the clock board.
 
 Like this will have the same synchronized time as the clock will think that has a GPS board connected to it. ; )
+
+NOTE: Add my changed version of the IPGeolocation library copying the "IPGeolocation" folder from here to your Arduino IDE libraries folder !!!
