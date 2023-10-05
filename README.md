@@ -5,4 +5,4 @@ This code and using one of this boards (ESP8266 or ESP32) I can connect to the i
 
 Like this will have the same synchronized time as the clock will think that has a GPS board connected to it. ; )
 
-NOTE: Add my changed version of the IPGeolocation library copying the "IPGeolocation" folder from here to your Arduino IDE libraries folder !!!
+NOTE: Added my fixed/changed version of the IPGeolocation library. Download it from here (https://github.com/BaltasarParreira/IPGeolocation) and install it on your Arduino IDE libraries folder !!!
