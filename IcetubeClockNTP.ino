@@ -163,7 +163,7 @@ void setup() {
 
   // Start IP Geolocalization
   ////////////////////////////////////////////////////
-  String Key = "0d8dfccd026449eb88f12ae471b63f61";
+  String Key = "<your abstractapi.com key here>";
   
   IPGeolocation location(Key,"ABSTRACT");
   IPGeo IPG;
