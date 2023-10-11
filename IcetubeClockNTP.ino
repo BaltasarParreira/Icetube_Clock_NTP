@@ -1,17 +1,45 @@
 /**
  * Icetube Clock NTP to GPS converter using ESP8266 or ESP32
- * V1.1 by BaltasarParreira
+ * V2.0 by BaltasarParreira
  * Using parts/code from NMEA CRC generator by ninetreesdesign David (https://github.com/ninetreesdesign/CRC-Checksum-Function/blob/master/ds_CRC_function.ino)
  */
 //#include <Arduino.h>
 //#include <ESP8266WiFi.h>
+#include <LittleFS.h>
 
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <ESP8266WiFi.h>
+
+#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+
+#define WEBSERVER_H
+#include <ESPAsyncWebServer.h> 
+#include <ESP8266mDNS.h>
+
+#include <WebSocketsServer.h>
+
+AsyncWebServer server(80);
+DNSServer dns; 
+
+WebSocketsServer webSocket = WebSocketsServer(81);
 
 #define DEBUG
 #include "IPGeolocation.h"
+
+//flag to use from web update to reboot the ESP
+
+bool shouldReboot = false;
+
+bool DST_MODE = true;
+int TIME_OFFSET = 1;     // Default PT Time
+int DST_TIME_OFFSET;
+String NTP;
+String TZID;
+String IPLOC;
+String FLAG;
+
+const char* host = "icetube-ntp-clock";
 
 const long utcOffsetInSeconds = 0; //3600;
 
@@ -135,7 +163,7 @@ void setup() {
 
   // Start IP Geolocalization
   ////////////////////////////////////////////////////
-  String Key = "<Go to abstractapi.com and register a free account !!!>";
+  String Key = "0d8dfccd026449eb88f12ae471b63f61";
   
   IPGeolocation location(Key,"ABSTRACT");
   IPGeo IPG;
@@ -150,7 +178,44 @@ void setup() {
   Serial.println(IPG.is_dst);
   Serial.println(IPG.latitude,4);
   Serial.println(IPG.longitude,4);
+  Serial.println(IPG.ip_address);
+  Serial.println(IPG.isp_name);
+  Serial.println(IPG.flag_png);
   ////////////////////////////////////////////////////
+
+  double DST = IPG.offset;
+  TZID = IPG.country;
+  TZID += "/" + IPG.city;
+  TZID += "<br>" + IPG.tz;
+  TZID += "<br>" + IPG.abbreviation;
+  if (IPG.is_dst)
+    TZID += "<br>DST is On";
+  else
+    TZID += "<br>DST is Off";
+
+  IPLOC = "Country: " + IPG.country;
+  IPLOC += "<br>Public IP: " + IPG.ip_address;
+  IPLOC += "<br>ISP Name: " + IPG.isp_name;
+  IPLOC += "<br>Latitude: " + String(IPG.latitude,4);
+  IPLOC += "<br>Longitude: " + String(IPG.longitude,4);
+
+  FLAG = IPG.flag_png;
+
+  DST_TIME_OFFSET = int(DST);
+  if (DST_MODE) {
+    TIME_OFFSET = DST_TIME_OFFSET;
+    //char MSG[150];
+    //sprintf (MSG, "%01u,%01u,%01u,%01u,%01u,%s",TIME_OFFSET,SHOUR,SMINUTE,EHOUR,EMINUTE,TZID.c_str());
+    //uint8_t num;
+    //webSocket.sendTXT(num, MSG, strlen(MSG));
+    //EepromWrite(); #### TO do later !!! ####
+    //NTP.setTimeZone(TIME_OFFSET);
+  }
+
+  Serial.print("DST="); Serial.println(DST);
+  Serial.print("TZID="); Serial.println(TZID);
+  Serial.print("DST_TIME_OFFSET="); Serial.println(DST_TIME_OFFSET);
+
 
   // Build Latitude and Longitude values
   ////////////////////////////////////////////////////
@@ -207,6 +272,64 @@ void setup() {
   Serial.println(longitude);
   */
   ////////////////////////////////////////////////////
+
+  //SPIFFS.begin();
+  if (!LittleFS.begin()) {
+    Serial.println("LittleFS mount failed");
+    return;
+  }
+
+  //server.on("/", handleRoot);
+  // send a file when / is requested
+  server.on("/setup", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/setup.html");
+  });
+
+  // Simple Firmware Update Form
+  server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/update.html");
+  });
+  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request){
+    shouldReboot = !Update.hasError();
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", shouldReboot?"OK":"FAIL");
+    response->addHeader("Connection", "close");
+    request->send(response);
+  },[](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final){
+    if(!index){
+      Serial.printf("Update Start: %s\n", filename.c_str());
+      Update.runAsync(true);
+      if(!Update.begin((ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000)){
+        Update.printError(Serial);
+      }
+    }
+    if(!Update.hasError()){
+      if(Update.write(data, len) != len){
+        Update.printError(Serial);
+      }
+    }
+    if(final){
+      if(Update.end(true)){
+        Serial.printf("Update Success: %uB\n", index+len);
+      } else {
+        Update.printError(Serial);
+      }
+    }
+  });
+
+  //server.onNotFound(handleNotFound);
+  server.onNotFound(notFound);
+
+  MDNS.begin(host);
+  
+  //httpUpdater.setup(&server);
+  server.begin();
+
+  MDNS.addService("http", "tcp", 80);
+  Serial.printf("HTTPUpdateServer ready! Open http://%s.local/update in your browser\n", host);
+
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+
 } 
 
 void checkButton(){
@@ -273,32 +396,38 @@ void loop() {
   int currentMonth = ptm->tm_mon+1;
   int currentYear = ptm->tm_year+1900;
 
-/*
-// NMEA message examples 
-char gps[7][80] = {
-    "$GPGGA,220112.00,2118.99192,N,15751.19869,W,2,10,0.83,38.7,M,-20.2,M,,0000*4B",
-    "$GPGSA,A,3,30,28,19,42,03,06,50,02,07,09,,,1.63,0.83,1.40*03",
-    "$GPGSV,4,1,15,02,33,254,30,03,11,047,11,05,08,207,17,06,56,315,23*77",
-    "$GPGSV,4,2,15,07,14,158,19,09,10,124,10,13,05,238,,17,25,007,*7B",
-    "$GPGSV,4,3,15,19,23,338,16,28,60,062,40,30,40,180,28,35,38,093,39*79",
-    "$GPRMC,220112.00,A,2118.99202,N,15751.19867,W,0.025,,"+timeClient.getDay()+",,,D*77",
-    "$GPVTG,,T,,M,0.025,N,0.046,K,D*23"
-};
-*/
+  /*
+  // NMEA message examples 
+  char gps[7][80] = {
+      "$GPGGA,220112.00,2118.99192,N,15751.19869,W,2,10,0.83,38.7,M,-20.2,M,,0000*4B",
+      "$GPGSA,A,3,30,28,19,42,03,06,50,02,07,09,,,1.63,0.83,1.40*03",
+      "$GPGSV,4,1,15,02,33,254,30,03,11,047,11,05,08,207,17,06,56,315,23*77",
+      "$GPGSV,4,2,15,07,14,158,19,09,10,124,10,13,05,238,,17,25,007,*7B",
+      "$GPGSV,4,3,15,19,23,338,16,28,60,062,40,30,40,180,28,35,38,093,39*79",
+      "$GPRMC,220112.00,A,2118.99202,N,15751.19867,W,0.025,,"+timeClient.getDay()+",,,D*77",
+      "$GPVTG,,T,,M,0.025,N,0.046,K,D*23"
+  };
+  */
 
-String time = timeClient.getFormattedTime();
-String finaltime = time;
-finaltime.replace(":","");
-char date[9];
-sprintf(date, "%02hhu%02hhu%02hhu", monthDay, currentMonth, currentYear%100);
+  String time = timeClient.getFormattedTime();
+  String finaltime = time;
+  finaltime.replace(":","");
+  char date[9];
+  sprintf(date, "%02hhu%02hhu%02hhu", monthDay, currentMonth, currentYear%100);
 
-// Build NMEA message
+  // Build NMEA message
   String cmd = "$GPRMC";    // a command name
   msg = cmd + delim + finaltime + ".00,A," + latitude + delim + longitude +",0.0,038.1" + delim + date + ",,,A" + splat;
   outputMsg(msg); // print the entire message string, and append the CRC
 
-
   delay(1000);
+
+  if(shouldReboot){
+    Serial.println("Rebooting...");
+    delay(100);
+    ESP.restart();
+  }
+
 }
 
 
@@ -346,3 +475,169 @@ void outputMsg(String msg) {
   Serial1.println(crc, HEX);
 }
 // -----------------------------------------------------------------------
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length)
+{
+  Serial.printf("webSocketEvent(%d, %d, ...)\r\n", num, type);
+  switch(type) {
+    case WStype_DISCONNECTED:
+      {
+      Serial.printf("[%u] Disconnected!\r\n", num);
+      }
+      break;
+    case WStype_CONNECTED:
+      {
+        IPAddress ip = webSocket.remoteIP(num);
+        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\r\n", num, ip[0], ip[1], ip[2], ip[3], payload);
+
+        /*  if (NIXIE_MODE) {
+          webSocket.sendTXT(num, "LIXIEON", strlen("LIXIEON"));
+        } else {
+               webSocket.sendTXT(num, "LIXIEOFF", strlen("LIXIEOFF"));
+               }
+        if (SLOTS_MODE) {
+          webSocket.sendTXT(num, "SLOTSON", strlen("SLOTSON"));
+        } else {
+               webSocket.sendTXT(num, "SLOTSOFF", strlen("SLOTSOFF"));
+               }
+        if (SHOW_DATE) {
+          webSocket.sendTXT(num, "DATEON", strlen("DATEON"));
+        } else {
+               webSocket.sendTXT(num, "DATEOFF", strlen("DATEOFF"));
+               }
+        if (SAFE_MODE) {
+          webSocket.sendTXT(num, "SAFEON", strlen("SAFEON"));
+        } else {
+               webSocket.sendTXT(num, "SAFEOFF", strlen("SAFEOFF"));
+               } */
+        if (DST_MODE) {
+          webSocket.sendTXT(num, "TMZON", strlen("TMZON"));
+        } else {
+               webSocket.sendTXT(num, "TMZOFF", strlen("TMZOFF"));
+               }
+                      
+        char MSG[250];
+        //sprintf (MSG, "%03u,%03u,%03u,%01u,%01u,%01u,%01u,%01u,%s",TIME_COLOR_RGB[0],TIME_COLOR_RGB[1],TIME_COLOR_RGB[2],TIME_OFFSET,SHOUR,SMINUTE,EHOUR,EMINUTE,TZID.c_str());
+        sprintf (MSG, "%01u,%s,%s,%s",TIME_OFFSET,TZID.c_str(),IPLOC.c_str(),FLAG.c_str());
+        webSocket.sendTXT(num, MSG, strlen(MSG));
+
+      }
+      break;
+    case WStype_TEXT:
+      {
+
+      Serial.printf("[%u] get Text: %s\r\n", num, payload);
+      String text = String((char *) &payload[0]);
+      
+      if(text.startsWith("?")){
+        /*
+        String rVal=(text.substring(text.indexOf("r")+2,text.indexOf("g")-1)); 
+        int rInt = rVal.toInt();
+        //Serial.println(rInt);
+
+        String gVal=(text.substring(text.indexOf("g")+2,text.indexOf("b")-1)); 
+        int gInt = gVal.toInt();
+        //Serial.println(gInt);
+
+        String bVal=(text.substring(text.indexOf("b")+2,text.indexOf("n")-1)); 
+        int bInt = bVal.toInt();
+        //Serial.println(bInt);
+
+        String nVal=(text.substring(text.indexOf("n")+2,text.indexOf("t=")-1)); 
+        //Serial.println(nVal);
+
+        if (nVal == "true") {
+          NIXIE_MODE = true;
+        } else {
+                NIXIE_MODE = false;
+                }
+                
+        String tVal=(text.substring(text.indexOf("t=")+2,text.indexOf("d")-1)); 
+        //Serial.println(tVal);
+
+        if (tVal == "true") {
+          SLOTS_MODE = true;
+        } else {
+                SLOTS_MODE = false;
+                }
+
+        String dVal=(text.substring(text.indexOf("d")+2,text.indexOf("z")-1)); 
+        //Serial.println(dVal);
+
+        if (dVal == "true") {
+          SHOW_DATE = true;
+        } else {
+                SHOW_DATE = false;
+                }
+
+        String sVal=(text.substring(text.indexOf("s=")+2,text.indexOf("sh")-1));
+        //Serial.println(sVal);
+
+        if (sVal == "true") {
+          SAFE_MODE = true;
+        } else {
+                SAFE_MODE = false;
+                }
+
+        String shVal=(text.substring(text.indexOf("sh=")+3,text.indexOf("sm")-1));
+        SHOUR = shVal.toInt();
+        //Serial.println(shVal);
+        String smVal=(text.substring(text.indexOf("sm=")+3,text.indexOf("eh")-1));
+        SMINUTE = smVal.toInt();
+        //Serial.println(smVal);
+        String ehVal=(text.substring(text.indexOf("eh=")+3,text.indexOf("em")-1));
+        EHOUR = ehVal.toInt();
+        //Serial.println(ehVal);
+        String emVal=(text.substring(text.indexOf("em=")+3,text.indexOf("tz")-1));
+        EMINUTE = emVal.toInt();
+        //Serial.println(emVal);
+        */
+
+        String zVal=(text.substring(text.indexOf("z")+2,text.indexOf("tz=")-1));
+        TIME_OFFSET = zVal.toInt();
+        //Serial.println(zVal);
+
+        String tzVal=(text.substring(text.indexOf("tz=")+3,text.length()));
+        //Serial.println(tzVal);
+
+        if (tzVal == "true") {
+          DST_MODE = true;
+          //GETdst(LAT, LON);
+          TIME_OFFSET = DST_TIME_OFFSET;
+         // prevhour = hour();
+        } else {
+                DST_MODE = false;
+                }
+                
+        //NTP.setTimeZone(TIME_OFFSET);
+        
+        //EepromWrite();
+
+        char MSG[250];
+        //sprintf (MSG, "%03u,%03u,%03u,%01u,%01u,%01u,%01u,%01u,%s",TIME_COLOR_RGB[0],TIME_COLOR_RGB[1],TIME_COLOR_RGB[2],TIME_OFFSET,SHOUR,SMINUTE,EHOUR,EMINUTE,TZID.c_str());
+        sprintf (MSG, "%01u,%s,%s,%s",TIME_OFFSET,TZID.c_str(),IPLOC.c_str(),FLAG.c_str());
+        webSocket.sendTXT(num, MSG, strlen(MSG));
+
+       }
+      }
+      break;
+    case WStype_BIN:
+      {
+      Serial.printf("[%u] get binary length: %u\r\n", num, length);
+      hexdump(payload, length);
+
+      // echo data back to browser
+      webSocket.sendBIN(num, payload, length);
+      }
+      break;
+    default:
+      {
+      Serial.printf("Invalid WStype [%d]\r\n", type);
+      }
+      break;
+  }
+}
+
+void notFound(AsyncWebServerRequest *request) {
+    request->send(404, "text/plain", "Not found");
+}
