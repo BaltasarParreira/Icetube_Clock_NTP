@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<!--<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>-->
+</head>
+<body>
+<style>
+ /* The switch - the box around the slider */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 54px;
+  height: 28px;
+}
+
+label {
+    margin-bottom: -10px;
+}
+    
+/* Hide default HTML checkbox */
+.switch input {display:none;}
+
+/* The slider */
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+/* The pick */
+.pick {
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.pick:before {
+  position: absolute;
+  content: "";
+  height: 26px;
+  width: 26px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2196F3;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #2196F3;
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(26px);
+  -ms-transform: translateX(26px);
+  transform: translateX(26px);
+}
+
+/* Rounded sliders */
+.slider.round,  .pick.round {
+  border-radius: 34px;
+}
+
+.slider.round:before, .pick.round:before {
+  border-radius: 50%;
+}
+
+.button-container form,
+.button-container form div {
+    display: inline;
+	margin-left: 25px;
+}
+
+.button-container button {
+    display: inline;
+    vertical-align: middle;
+} 
+</style>
+<div class="container" style="margin: 15px;"><div class="row">
+<h1>Icetube Clock NTP Update</h1><br><br>
+<!-- Rounded switch -->
+<div style="width: 317px; background-color: #30a3c31f; padding: 10px; border-radius: 12px; -webkit-transition: .4s; transition: .4s; border-color: #999; border-style: solid; border-width: 1px;">
+<b>Firmware update</b><br>
+<div class="button-container">
+<form method="POST" action="#" enctype="multipart/form-data" id="upload_form">
+	<div>
+		<input type="file" name="update" id="file">
+		<br>
+		<input type="submit" value="Update">
+	</div>
+</form>
+<form action="/setup">
+	<div>
+		<input type="submit" value="Cancel" />
+	</div>
+</form>
+</div>
+<br>
+<div id="prg_wrap" style="border: 0px solid; width: 295px;">
+   <div id="prg" style="text-shadow: 2px 2px 3px black; padding: 5px 0; display: none; border: 1px solid #008aff; background: #002180; text-align: center; color: white;"></div>
+</div>
+</div>
+</div>
+</div>
+<script>
+  window.onload = function() {
+    var url = document.URL;
+    var textIp = url.substr(7, url.lastIndexOf("/")-7);
+    var text = "ws:\\/\\/" + textIp + ":81"; 
+    ipValue = text;
+    connection = new WebSocket(ipValue, ['arduino']);
+	setTimeout(
+		function() {
+                   connection.send( "!st=false" )
+                   }, 50);	
+	};
+
+var domReady = function(callback) {
+	document.readyState === "interactive" || document.readyState === "complete" ? callback() : document.addEventListener("DOMContentLoaded", callback);
+};
+
+domReady(function() {
+	var myform = document.getElementById('upload_form');
+	var filez  = document.getElementById('file');
+
+	myform.onsubmit = function(event) {
+		event.preventDefault();
+
+		var formData = new FormData();
+		var file     = filez.files[0];
+
+		if (!file) { return false; }
+
+		formData.append("files", file, file.name);
+
+		var xhr = new XMLHttpRequest();
+		xhr.upload.addEventListener("progress", function(evt) {
+			if (evt.lengthComputable) {
+				var per = Math.round((evt.loaded / evt.total) * 100);
+				var prg = document.getElementById('prg');
+
+				prg.innerHTML     = per + "%"
+				prg.style.width   = per + "%"
+				prg.style.display = "block"
+			}
+			if (per == 100) {
+				setTimeout(function() {
+					document.getElementById('prg_wrap').innerHTML += '<br><span style="color: blue;"><b>File received. Processing... please wait !!!</b></span>';
+				}, 2000);
+			}
+		}, false);
+		
+		xhr.open('POST', location.href, true);
+		
+		// Set up a handler for when the request finishes.
+		xhr.onload = function () {
+			if (xhr.status === 200) {
+				//alert('Success');
+				document.getElementById('prg').display = "none";
+				document.getElementById('prg_wrap').innerHTML = '<span style="color: green;"><b>Update OK. Rebooting... please wait !!!</b></span>';
+			} else {
+				//alert('An error occurred!');
+				document.getElementById('prg').display = "none";
+				document.getElementById('prg_wrap').innerHTML = '<span style="color: red;"><b>Update failed. Please try again !!!</b></span>';
+			}
+		};
+
+		xhr.send(formData);
+   }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<!--<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jscolor/2.0.4/jscolor.min.js"></script>
+</head>
+<body>
+<style>
+ /* The switch - the box around the slider */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 54px;
+  height: 28px;
+}
+
+label {
+    margin-bottom: -10px;
+}
+    
+/* Hide default HTML checkbox */
+.switch input {display:none;}
+
+/* The slider */
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+/* The pick */
+.pick {
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.pick:before {
+  position: absolute;
+  content: "";
+  height: 26px;
+  width: 26px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2196F3;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #2196F3;
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(26px);
+  -ms-transform: translateX(26px);
+  transform: translateX(26px);
+}
+
+/* Rounded sliders */
+.slider.round,  .pick.round {
+  border-radius: 34px;
+}
+
+.slider.round:before, .pick.round:before {
+  border-radius: 50%;
+} 
+</style>
+
+<div class="container" style="margin: 15px;"><div class="row">
+<h1>Icetube Clock NTP Setup</h1><br><br>
+<div style="width: 340px; background-color: #30a3c31f; padding: 10px; border-radius: 12px; -webkit-transition: .4s; transition: .4s; border-color: #999; border-style: solid; border-width: 1px;">
+<!-- Rounded switch -->
+<b>IP Geolocation Information</b><br>
+<div id="ntp"><div class="" style="background-color: #ccc; cursor: inherit; border-radius: 12px; width: 320px;"><div id="flagcont"></div><p id="ntpcont" style="padding: 2px 10px 2px 10px;"></p></div></div>
+</div><br>
+<div style="width: 340px; background-color: #30a3c31f; padding: 10px; border-radius: 12px; -webkit-transition: .4s; transition: .4s; border-color: #999; border-style: solid; border-width: 1px;">
+<!-- Rounded switch -->
+<b>Auto Time Zone Offset</b>&nbsp;&nbsp;
+<label class="switch">
+  <input type="checkbox" id="dst" onchange="toggle();">
+  <span class="slider round"></span>
+</label><br><br>
+<div id="tzid" style="display: none;"><b>Detected Time Zone and Daylight Saving</b>&nbsp;&nbsp;<div class="" style="background-color: #ccc; cursor: inherit; border-radius: 12px; width: 320px;"><p id="tzidcont" style="padding: 2px 10px 2px 10px;"></p></div></div>
+<div id="t"><b>Time Zone Offset</b>&nbsp;&nbsp;
+<label>
+  <input class="pick round " onfocusout="toggle();" id="tzone" style="border-color: #999; border-style: solid; border-width: 1px; width: 35px; height: 25px; letter-spacing: 1px; text-align: center;"> H
+</label>
+</div>
+</div>
+
+</div>
+</div>
+<script>
+
+  function toggle() {
+    connection.send( "?z=" + document.getElementById('tzone').value + "&tz=" + document.getElementById('dst').checked );
+
+    if (document.getElementById('dst').checked) {
+          document.getElementById('t').style.color = "#CCC";
+          document.getElementById('tzone').style.backgroundColor = "#FFFFFF";
+          document.getElementById('tzone').style.color = "#CCC";
+          document.getElementById('tzone').disabled = true;
+          document.getElementById("tzid").style.display = "inline";          
+    } else {
+            document.getElementById('t').style.color = "#000";
+            document.getElementById('tzone').style.backgroundColor = "#CCC";
+            document.getElementById('tzone').style.color = "#000";
+            document.getElementById("tzone").disabled = false;
+            document.getElementById("tzid").style.display = "none";            
+            }
+  }
+
+  var res;
+
+  window.onload = function() {
+    var url = document.URL;
+    var textIp = url.substr(7, url.lastIndexOf("/")-7);
+    var text = "ws:\\/\\/" + textIp + ":81"; 
+    ipValue = text;  
+    connection = new WebSocket(ipValue, ['arduino']);   
+
+    connection.onmessage = function(evt) { //console.log(evt.data);
+     if (evt.data === 'TMZON') {
+        document.getElementById('t').style.color = "#ccc";  
+        document.getElementById('dst').checked = true;
+        document.getElementById('tzone').style.backgroundColor = "#FFFFFF";
+        document.getElementById("tzone").disabled = true;
+        document.getElementById("tzid").style.display = "inline";
+      }
+      else if (evt.data === 'TMZOFF') {
+        document.getElementById('t').style.color = "#000";
+        document.getElementById('dst').checked = false;
+        document.getElementById('tzone').style.backgroundColor = "#CCC";
+        document.getElementById("tzone").disabled = false;
+        document.getElementById("tzid").style.display = "none";
+      } else {
+              res = evt.data.split(",");
+              document.getElementById('tzone').value = res[0];
+              document.getElementById('tzidcont').innerHTML = res[1];
+			  document.getElementById('ntpcont').innerHTML = res[2];
+			  document.getElementById('flagcont').innerHTML = "<img src='" + res[3] + "' style='margin-right: 8px; margin-top: 8px; float: right; width: 30px;'>";
+              }
+    };
+
+  };
+
+</script>
+</body>
+</html>
