@@ -4,6 +4,8 @@
 -----------------------------------------------------------------------------------------
 2023/10/10 - UPDATE TO VERSION 2.0
 - Now with webpage showing all IP Geolocation information and also preparing for soon having auto Region/DST for Icetube Clock so no need to adjust Region and DST on the clock menu itself.
+- OTA Firmware webpage for uploading new \<file\>.bin versions easier without the need to connect USB cable on "http://\<ESP IP\>/update".
+- IP Geolocation infromation and future auto Region/DST onn/off on "http://\<ESP IP\>/setup".
 
 NOTES: 
 - Upload the contents of "data" folder with LittleFS to the ESP first !!!
