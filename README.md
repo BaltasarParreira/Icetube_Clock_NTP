@@ -2,6 +2,11 @@
 # NTP to GPS for Icetube clock using any ESP8266 or ESP32 #
 
 -----------------------------------------------------------------------------------------
+2023/10/12 - UPDATE TO VERSION 2.1
+- abstractapi.com key can now be written on setup webpage so it's stored on ESP FS.
+- Some commented old code cleanup.
+- Some other improvements.
+-----------------------------------------------------------------------------------------
 2023/10/10 - UPDATE TO VERSION 2.0
 - Now with webpage showing all IP Geolocation information and also preparing for soon having auto Region/DST for Icetube Clock so no need to adjust Region and DST on the clock menu itself.
 - OTA Firmware webpage for uploading new \<file\>.bin versions easier without the need to connect USB cable on "http://\<ESP IP\>/update".
