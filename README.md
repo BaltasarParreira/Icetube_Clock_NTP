@@ -6,8 +6,9 @@
 - abstractapi.com key can now be written on setup webpage so it's stored on ESP FS.
 - Some commented old code cleanup.
 - Some other improvements.
-
+  
 NOTE: First firmware .bin file release for directly upload trough ESP update webpage.
+
 -----------------------------------------------------------------------------------------
 2023/10/10 - UPDATE TO VERSION 2.0
 - Now with webpage showing all IP Geolocation information and also preparing for soon having auto Region/DST for Icetube Clock so no need to adjust Region and DST on the clock menu itself.
