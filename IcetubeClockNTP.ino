@@ -1,10 +1,9 @@
 /**
  * Icetube Clock NTP to GPS converter using ESP8266 or ESP32
- * V2.0 by BaltasarParreira
+ * V2.1 by BaltasarParreira
  * Using parts/code from NMEA CRC generator by ninetreesdesign David (https://github.com/ninetreesdesign/CRC-Checksum-Function/blob/master/ds_CRC_function.ino)
  */
 //#include <Arduino.h>
-//#include <ESP8266WiFi.h>
 #include <LittleFS.h>
 
 #include <NTPClient.h>
@@ -26,18 +25,23 @@ WebSocketsServer webSocket = WebSocketsServer(81);
 
 #define DEBUG
 #include "IPGeolocation.h"
+String key;
 
 //flag to use from web update to reboot the ESP
-
 bool shouldReboot = false;
 
 bool DST_MODE = true;
 int TIME_OFFSET = 1;     // Default PT Time
 int DST_TIME_OFFSET;
+double DST;
 String NTP;
 String TZID;
 String IPLOC;
 String FLAG;
+String keyVal;
+int lastsecond;
+uint8_t SNUM;
+
 
 const char* host = "icetube-ntp-clock";
 
@@ -81,6 +85,337 @@ String latitude;
 String longitude;
 ////////////////////////////////////////////////////
 
+void checkButton(){
+  // check for button press
+  if ( digitalRead(TRIGGER_PIN) == LOW ) {
+    // poor mans debounce/press-hold, code not ideal for production
+    delay(50);
+    if( digitalRead(TRIGGER_PIN) == LOW ){
+      Serial.println(F("Button Pressed"));
+      // still holding button for 3000 ms, reset settings, code not ideaa for production
+      delay(3000); // reset delay hold
+      if( digitalRead(TRIGGER_PIN) == LOW ){
+        Serial.println(F("Button Held"));
+        Serial.println(F("Erasing Config, restarting"));
+        wm.resetSettings();
+        ESP.restart();
+      }
+      
+      // start portal w delay
+      Serial.println(F("Starting config portal"));
+      wm.setConfigPortalTimeout(120);
+      
+      if (!wm.startConfigPortal("OnDemandAP","password")) {
+        Serial.println(F("failed to connect or hit timeout"));
+        delay(3000);
+        // ESP.restart();
+      } else {
+        //if you get here you have connected to the WiFi
+        Serial.println(F("connected...yeey :)"));
+      }
+    }
+  }
+}
+
+String getParam(String name){
+  //read parameter from server, for customhmtl input
+  String value;
+  if(wm.server->hasArg(name)) {
+    value = wm.server->arg(name);
+  }
+  return value;
+}
+
+void saveParamCallback(){
+  Serial.println(F("[CALLBACK] saveParamCallback fired"));
+  Serial.println(F("PARAM customfieldid = ") + getParam("customfieldid"));
+}
+
+// -----------------------------------------------------------------------
+byte convertToCRC(char *buff) {
+  // NMEA CRC: XOR each byte with previous for all chars between '$' and '*'
+  char c;
+  byte i;
+  byte start_with = 0;    // index of starting char in msg
+  byte end_with = 0;      // index of starting char in msg
+  byte crc = 0;
+
+  for (i = 0; i < buff_len; i++) {
+    c = buff[i];
+    if (c == '$') {
+      start_with = i;
+    }
+    if (c == '*') {
+      end_with = i;
+    }
+  }
+  if (end_with > start_with) {
+    for (i = start_with + 1; i < end_with; i++) { // XOR every character between '$' and '*'
+      crc = crc ^ buff[i] ;  // xor the next char
+    }
+  }
+  else { // else if error, print a msg  
+    Serial.println(F("CRC ERROR"));
+  }
+  return crc;
+  
+  // based on code by Elimeléc López - July-19th-2013
+}
+
+// -----------------------------------------------------------------------
+void outputMsg(String msg) {
+  msg.toCharArray(CRCbuffer, sizeof(CRCbuffer)); // put complete string into CRCbuffer
+  byte crc = convertToCRC(CRCbuffer); // call function to compute the crc value
+
+  Serial.print(msg);
+  if (crc < 16) Serial.print("0"); // add leading 0 if needed
+  Serial.println(crc, HEX);
+
+  Serial1.print(msg);
+  if (crc < 16) Serial1.print("0"); // add leading 0 if needed
+  Serial1.println(crc, HEX);
+}
+// -----------------------------------------------------------------------
+
+void getLocation() {
+  if (key != "") {
+    IPGeolocation location(key,"ABSTRACT");
+    IPGeo IPG;
+    location.updateStatus(&IPG);
+
+    if (location.getResponse().indexOf("ip_address") > 0 ) {
+      // Debug JSON reply
+      Serial.println(location.getResponse());
+      Serial.println(IPG.city);
+      Serial.println(IPG.country);
+      Serial.println(IPG.country_code);
+      Serial.println(IPG.tz);
+      Serial.println(IPG.offset);
+      Serial.println(IPG.is_dst);
+      Serial.println(IPG.latitude,4);
+      Serial.println(IPG.longitude,4);
+      Serial.println(IPG.ip_address);
+      Serial.println(IPG.isp_name);
+      Serial.println(IPG.flag_png);
+      ////////////////////////////////////////////////////
+
+      DST = IPG.offset;
+      TZID = IPG.country;
+      TZID += "/" + IPG.city;
+      TZID += "<br>" + IPG.tz;
+      TZID += "<br>" + IPG.abbreviation;
+      if (IPG.is_dst)
+        TZID += "<br>DST is On";
+      else
+        TZID += "<br>DST is Off";
+
+      IPLOC = "Country: " + IPG.country;
+      IPLOC += "<br>Public IP: " + IPG.ip_address;
+      IPLOC += "<br>ISP Name: " + IPG.isp_name;
+      IPLOC += "<br>Latitude: " + String(IPG.latitude,4);
+      IPLOC += "<br>Longitude: " + String(IPG.longitude,4);
+
+      FLAG = IPG.flag_png;
+
+      DST_TIME_OFFSET = int(DST);
+      if (DST_MODE) {
+        TIME_OFFSET = DST_TIME_OFFSET;
+        //EepromWrite(); #### TO do later ??? ####
+        //NTP.setTimeZone(TIME_OFFSET);
+      }
+
+      Serial.print(F("DST=")); Serial.println(DST);
+      Serial.print(F("TZID=")); Serial.println(TZID);
+      Serial.print(F("DST_TIME_OFFSET=")); Serial.println(DST_TIME_OFFSET);
+
+
+      // Build Latitude and Longitude values
+      ////////////////////////////////////////////////////
+      String lat_tmp = String(IPG.latitude,4);
+      String long_tmp = String(IPG.longitude,4);
+
+      String lat_ns = "";
+      if (lat_tmp.startsWith("-"))
+        lat_ns = ",S";
+      else
+        lat_ns = ",N";
+      lat_tmp.replace("-", "");
+
+      String long_ew = "";
+      if (long_tmp.startsWith("-"))
+        long_ew = ",W";
+      else
+        long_ew = ",E";
+      long_tmp.replace("-", "");
+
+      int lat_ind = lat_tmp.indexOf('.');  //finds location of "."
+      String lat_degrees = lat_tmp.substring(0, lat_ind);  //captures first data String
+      String lat_decimaldegrees = lat_tmp.substring(lat_ind);  //captures second data String
+      float l_decimaldegrees = lat_decimaldegrees.toFloat()*60;
+
+      int long_ind = long_tmp.indexOf('.');  //finds location of "."
+      String long_degrees = long_tmp.substring(0, long_ind);  //captures first data String
+      String long_decimaldegrees = long_tmp.substring(long_ind);  //captures second data String
+      float lo_decimaldegrees = long_decimaldegrees.toFloat()*60;
+
+      char f_lat_degrees[3];
+      char f_long_degrees[4];
+      sprintf(f_lat_degrees, "%02s", lat_degrees);
+      sprintf(f_long_degrees, "%03s", long_degrees);
+
+      String f_l_decimaldegrees = String(l_decimaldegrees, 4);
+      String f_lo_decimaldegrees = String(lo_decimaldegrees, 4);
+      if (f_l_decimaldegrees.length() == 6)
+        f_l_decimaldegrees = "0" + f_l_decimaldegrees;
+      if (f_lo_decimaldegrees.length() == 6)
+        f_lo_decimaldegrees = "0" + f_lo_decimaldegrees;
+
+      latitude = f_lat_degrees + f_l_decimaldegrees + lat_ns;
+      longitude = f_long_degrees + f_lo_decimaldegrees + long_ew;
+
+      // Debug Latitude and Longitude values
+      /*
+      Serial.println(F(f_lat_degrees));
+      Serial.println(F(f_l_decimaldegrees));
+      Serial.println(F(latitude));
+
+      Serial.println(F(f_long_degrees));
+      Serial.println(F(f_lo_decimaldegrees));
+      Serial.println(F(longitude));
+      */
+    } else {
+      IPLOC = "<font color='red'>Invalid key.<br>Please check !!!</font>";
+      FLAG = "";
+      TZID = "";
+    }
+  }
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length)
+{
+  Serial.printf("webSocketEvent(%d, %d, ...)\r\n", num, type);
+  switch(type) {
+    case WStype_DISCONNECTED:
+      {
+      Serial.printf("[%u] Disconnected!\r\n", num);
+      }
+      break;
+    case WStype_CONNECTED:
+      {
+        IPAddress ip = webSocket.remoteIP(num);
+        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\r\n", num, ip[0], ip[1], ip[2], ip[3], payload);
+
+        if (DST_MODE) {
+          webSocket.sendTXT(num, "TMZON", strlen("TMZON"));
+        } else {
+               webSocket.sendTXT(num, "TMZOFF", strlen("TMZOFF"));
+               }
+                      
+        char MSG[260];
+        sprintf (MSG, "%01u,%s,%s,%s,%s",TIME_OFFSET,TZID.c_str(),IPLOC.c_str(),FLAG.c_str(),key.c_str());
+        webSocket.sendTXT(num, MSG, strlen(MSG));
+
+      }
+      break;
+    case WStype_TEXT:
+      {
+
+      Serial.printf("[%u] get Text: %s\r\n", num, payload);
+      String text = String((char *) &payload[0]);
+      
+      if(text.startsWith("?")){
+  
+        String zVal=(text.substring(text.indexOf("z")+2,text.indexOf("tz=")-1));
+        TIME_OFFSET = zVal.toInt();
+        //Serial.println(F(zVal));
+
+        String tzVal=(text.substring(text.indexOf("tz=")+3,text.indexOf("k=")-1));
+        //Serial.println(F(tzVal));
+
+        if (tzVal == "true") {
+          DST_MODE = true;
+          TIME_OFFSET = DST_TIME_OFFSET;
+        } else {
+                DST_MODE = false;
+                }
+                
+        keyVal=(text.substring(text.indexOf("k=")+2,text.length()));
+        //Serial.println(F(keyVal));
+        
+        //NTP.setTimeZone(TIME_OFFSET);
+        
+        //EepromWrite();
+
+        char MSG[260];
+        sprintf (MSG, "%01u,%s,%s,%s,%s",TIME_OFFSET,TZID.c_str(),IPLOC.c_str(),FLAG.c_str(),keyVal.c_str());
+        webSocket.sendTXT(num, MSG, strlen(MSG));
+        SNUM = num;
+        
+       }
+      }
+      break;
+    case WStype_BIN:
+      {
+      Serial.printf("[%u] get binary length: %u\r\n", num, length);
+      hexdump(payload, length);
+
+      // echo data back to browser
+      webSocket.sendBIN(num, payload, length);
+      }
+      break;
+    default:
+      {
+      Serial.printf("Invalid WStype [%d]\r\n", type);
+      }
+      break;
+  }
+}
+
+void notFound(AsyncWebServerRequest *request) {
+    request->send(404, "text/plain", "Not found");
+}
+
+void writeFile(const char * path, const String message){
+    Serial.printf("Writing file: %s\r\n", path);
+
+    File file = LittleFS.open(path, "w");
+    if(!file){
+        Serial.println(F("- failed to open file for writing"));
+        return;
+    }
+
+    if(file.print(message)){
+        Serial.println(F("- file written"));
+    } else {
+        Serial.println(F("- write failed"));
+    }
+
+    file.close();
+}
+
+void readFile(const char * path){
+    Serial.printf("Reading file: %s\r\n", path);
+
+    File file = LittleFS.open(path, "r");
+    if(!file || file.isDirectory()){
+        Serial.println(F("- failed to open file for reading"));
+        return;
+    }
+
+    Serial.println(F("- read from file:"));
+    while(file.available()){
+        key = file.readStringUntil('\n');
+    }
+
+    file.close();
+
+    // Start IP Geolocalization
+    ////////////////////////////////////////////////////
+    if (path == "/key.txt") {
+      getLocation();
+    }
+}
+
 
 void setup() {
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP  
@@ -88,7 +423,7 @@ void setup() {
   Serial1.begin(9600);
   Serial.setDebugOutput(false);  
   delay(3000);
-  Serial.println("\n Starting");
+  Serial.println(F("\n Starting"));
 
   pinMode(TRIGGER_PIN, INPUT);
   
@@ -98,7 +433,6 @@ void setup() {
 
   // add a custom input field
   int customFieldLength = 40;
-
 
   // new (&custom_field) WiFiManagerParameter("customfieldid", "Custom Field Label", "Custom Field Value", customFieldLength,"placeholder=\"Custom Field Placeholder\"");
   
@@ -122,7 +456,6 @@ void setup() {
 
   // set dark theme
   wm.setClass("invert");
-
 
   //set static ip
   // wm.setSTAStaticIPConfig(IPAddress(10,0,1,99), IPAddress(10,0,1,1), IPAddress(255,255,255,0)); // set static ip,gw,sn
@@ -148,12 +481,12 @@ void setup() {
   //res = wm.autoConnect("AutoConnectAP","password"); // password protected ap
 
   if(!res) {
-    Serial.println("Failed to connect or hit timeout");
+    Serial.println(F("Failed to connect or hit timeout"));
     // ESP.restart();
   } 
   else {
     //if you get here you have connected to the WiFi    
-    Serial.println("Connected...yeey :)");
+    Serial.println(F("Connected...yeey :)"));
   }
 
   // Start NTP
@@ -161,123 +494,12 @@ void setup() {
   timeClient.begin();
   ////////////////////////////////////////////////////
 
-  // Start IP Geolocalization
-  ////////////////////////////////////////////////////
-  String Key = "<your abstractapi.com key here>";
-  
-  IPGeolocation location(Key,"ABSTRACT");
-  IPGeo IPG;
-  location.updateStatus(&IPG);
-  // Debug JSON reply
-  Serial.println(location.getResponse());
-  Serial.println(IPG.city);
-  Serial.println(IPG.country);
-  Serial.println(IPG.country_code);
-  Serial.println(IPG.tz);
-  Serial.println(IPG.offset);
-  Serial.println(IPG.is_dst);
-  Serial.println(IPG.latitude,4);
-  Serial.println(IPG.longitude,4);
-  Serial.println(IPG.ip_address);
-  Serial.println(IPG.isp_name);
-  Serial.println(IPG.flag_png);
-  ////////////////////////////////////////////////////
-
-  double DST = IPG.offset;
-  TZID = IPG.country;
-  TZID += "/" + IPG.city;
-  TZID += "<br>" + IPG.tz;
-  TZID += "<br>" + IPG.abbreviation;
-  if (IPG.is_dst)
-    TZID += "<br>DST is On";
-  else
-    TZID += "<br>DST is Off";
-
-  IPLOC = "Country: " + IPG.country;
-  IPLOC += "<br>Public IP: " + IPG.ip_address;
-  IPLOC += "<br>ISP Name: " + IPG.isp_name;
-  IPLOC += "<br>Latitude: " + String(IPG.latitude,4);
-  IPLOC += "<br>Longitude: " + String(IPG.longitude,4);
-
-  FLAG = IPG.flag_png;
-
-  DST_TIME_OFFSET = int(DST);
-  if (DST_MODE) {
-    TIME_OFFSET = DST_TIME_OFFSET;
-    //char MSG[150];
-    //sprintf (MSG, "%01u,%01u,%01u,%01u,%01u,%s",TIME_OFFSET,SHOUR,SMINUTE,EHOUR,EMINUTE,TZID.c_str());
-    //uint8_t num;
-    //webSocket.sendTXT(num, MSG, strlen(MSG));
-    //EepromWrite(); #### TO do later !!! ####
-    //NTP.setTimeZone(TIME_OFFSET);
-  }
-
-  Serial.print("DST="); Serial.println(DST);
-  Serial.print("TZID="); Serial.println(TZID);
-  Serial.print("DST_TIME_OFFSET="); Serial.println(DST_TIME_OFFSET);
-
-
-  // Build Latitude and Longitude values
-  ////////////////////////////////////////////////////
-  String lat_tmp = String(IPG.latitude,4);
-  String long_tmp = String(IPG.longitude,4);
-
-  String lat_ns = "";
-  if (lat_tmp.startsWith("-"))
-    lat_ns = ",S";
-  else
-    lat_ns = ",N";
-  lat_tmp.replace("-", "");
-
-  String long_ew = "";
-  if (long_tmp.startsWith("-"))
-    long_ew = ",W";
-  else
-    long_ew = ",E";
-  long_tmp.replace("-", "");
-
-  int lat_ind = lat_tmp.indexOf('.');  //finds location of "."
-  String lat_degrees = lat_tmp.substring(0, lat_ind);  //captures first data String
-  String lat_decimaldegrees = lat_tmp.substring(lat_ind);  //captures second data String
-  float l_decimaldegrees = lat_decimaldegrees.toFloat()*60;
-
-  int long_ind = long_tmp.indexOf('.');  //finds location of "."
-  String long_degrees = long_tmp.substring(0, long_ind);  //captures first data String
-  String long_decimaldegrees = long_tmp.substring(long_ind);  //captures second data String
-  float lo_decimaldegrees = long_decimaldegrees.toFloat()*60;
-
-  char f_lat_degrees[3];
-  char f_long_degrees[4];
-  sprintf(f_lat_degrees, "%02s", lat_degrees);
-  sprintf(f_long_degrees, "%03s", long_degrees);
-
-  String f_l_decimaldegrees = String(l_decimaldegrees, 4);
-  String f_lo_decimaldegrees = String(lo_decimaldegrees, 4);
-  if (f_l_decimaldegrees.length() == 6)
-    f_l_decimaldegrees = "0" + f_l_decimaldegrees;
-  if (f_lo_decimaldegrees.length() == 6)
-    f_lo_decimaldegrees = "0" + f_lo_decimaldegrees;
-
-  latitude = f_lat_degrees + f_l_decimaldegrees + lat_ns;
-  longitude = f_long_degrees + f_lo_decimaldegrees + long_ew;
-
-  // Debug Latitude and Longitude values
-  /*
-  Serial.println(f_lat_degrees);
-  Serial.println(f_l_decimaldegrees);
-  Serial.println(latitude);
-
-  Serial.println(f_long_degrees);
-  Serial.println(f_lo_decimaldegrees);
-  Serial.println(longitude);
-  */
-  ////////////////////////////////////////////////////
-
-  //SPIFFS.begin();
   if (!LittleFS.begin()) {
-    Serial.println("LittleFS mount failed");
+    Serial.println(F("LittleFS mount failed"));
     return;
   }
+
+  readFile("/key.txt"); 
 
   //server.on("/", handleRoot);
   // send a file when / is requested
@@ -332,54 +554,6 @@ void setup() {
 
 } 
 
-void checkButton(){
-  // check for button press
-  if ( digitalRead(TRIGGER_PIN) == LOW ) {
-    // poor mans debounce/press-hold, code not ideal for production
-    delay(50);
-    if( digitalRead(TRIGGER_PIN) == LOW ){
-      Serial.println("Button Pressed");
-      // still holding button for 3000 ms, reset settings, code not ideaa for production
-      delay(3000); // reset delay hold
-      if( digitalRead(TRIGGER_PIN) == LOW ){
-        Serial.println("Button Held");
-        Serial.println("Erasing Config, restarting");
-        wm.resetSettings();
-        ESP.restart();
-      }
-      
-      // start portal w delay
-      Serial.println("Starting config portal");
-      wm.setConfigPortalTimeout(120);
-      
-      if (!wm.startConfigPortal("OnDemandAP","password")) {
-        Serial.println("failed to connect or hit timeout");
-        delay(3000);
-        // ESP.restart();
-      } else {
-        //if you get here you have connected to the WiFi
-        Serial.println("connected...yeey :)");
-      }
-    }
-  }
-}
-
-
-String getParam(String name){
-  //read parameter from server, for customhmtl input
-  String value;
-  if(wm.server->hasArg(name)) {
-    value = wm.server->arg(name);
-  }
-  return value;
-}
-
-void saveParamCallback(){
-  Serial.println("[CALLBACK] saveParamCallback fired");
-  Serial.println("PARAM customfieldid = " + getParam("customfieldid"));
-}
-
-
 void loop() {
   if(wm_nonblocking) wm.process(); // avoid delays() in loop when non-blocking and other long running code  
   checkButton();
@@ -418,226 +592,30 @@ void loop() {
   // Build NMEA message
   String cmd = "$GPRMC";    // a command name
   msg = cmd + delim + finaltime + ".00,A," + latitude + delim + longitude +",0.0,038.1" + delim + date + ",,,A" + splat;
-  outputMsg(msg); // print the entire message string, and append the CRC
+  if (timeClient.getSeconds() != lastsecond) {
+    outputMsg(msg); // print the entire message string, and append the CRC
+    lastsecond = timeClient.getSeconds();
+  }
 
-  delay(1000);
+  //delay(1000);
 
   if(shouldReboot){
-    Serial.println("Rebooting...");
+    Serial.println(F("Rebooting..."));
     delay(100);
     ESP.restart();
   }
 
-}
+  if (key != keyVal && keyVal != "") {
+    key = keyVal;
+    writeFile("/key.txt", keyVal);
 
+    // Start IP Geolocalization
+    ////////////////////////////////////////////////////
+    getLocation();
 
-// -----------------------------------------------------------------------
-byte convertToCRC(char *buff) {
-  // NMEA CRC: XOR each byte with previous for all chars between '$' and '*'
-  char c;
-  byte i;
-  byte start_with = 0;    // index of starting char in msg
-  byte end_with = 0;      // index of starting char in msg
-  byte crc = 0;
-
-  for (i = 0; i < buff_len; i++) {
-    c = buff[i];
-    if (c == '$') {
-      start_with = i;
-    }
-    if (c == '*') {
-      end_with = i;
-    }
+    char MSG[260];
+    sprintf (MSG, "%01u,%s,%s,%s,%s",TIME_OFFSET,TZID.c_str(),IPLOC.c_str(),FLAG.c_str(),keyVal.c_str());
+    webSocket.sendTXT(SNUM, MSG, strlen(MSG));
   }
-  if (end_with > start_with) {
-    for (i = start_with + 1; i < end_with; i++) { // XOR every character between '$' and '*'
-      crc = crc ^ buff[i] ;  // xor the next char
-    }
-  }
-  else { // else if error, print a msg  
-    Serial.println("CRC ERROR");
-  }
-  return crc;
-  
-  // based on code by Elimeléc López - July-19th-2013
-}
-// -----------------------------------------------------------------------
-void outputMsg(String msg) {
-  msg.toCharArray(CRCbuffer, sizeof(CRCbuffer)); // put complete string into CRCbuffer
-  byte crc = convertToCRC(CRCbuffer); // call function to compute the crc value
 
-  Serial.print(msg);
-  if (crc < 16) Serial.print("0"); // add leading 0 if needed
-  Serial.println(crc, HEX);
-
-  Serial1.print(msg);
-  if (crc < 16) Serial1.print("0"); // add leading 0 if needed
-  Serial1.println(crc, HEX);
-}
-// -----------------------------------------------------------------------
-
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length)
-{
-  Serial.printf("webSocketEvent(%d, %d, ...)\r\n", num, type);
-  switch(type) {
-    case WStype_DISCONNECTED:
-      {
-      Serial.printf("[%u] Disconnected!\r\n", num);
-      }
-      break;
-    case WStype_CONNECTED:
-      {
-        IPAddress ip = webSocket.remoteIP(num);
-        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\r\n", num, ip[0], ip[1], ip[2], ip[3], payload);
-
-        /*  if (NIXIE_MODE) {
-          webSocket.sendTXT(num, "LIXIEON", strlen("LIXIEON"));
-        } else {
-               webSocket.sendTXT(num, "LIXIEOFF", strlen("LIXIEOFF"));
-               }
-        if (SLOTS_MODE) {
-          webSocket.sendTXT(num, "SLOTSON", strlen("SLOTSON"));
-        } else {
-               webSocket.sendTXT(num, "SLOTSOFF", strlen("SLOTSOFF"));
-               }
-        if (SHOW_DATE) {
-          webSocket.sendTXT(num, "DATEON", strlen("DATEON"));
-        } else {
-               webSocket.sendTXT(num, "DATEOFF", strlen("DATEOFF"));
-               }
-        if (SAFE_MODE) {
-          webSocket.sendTXT(num, "SAFEON", strlen("SAFEON"));
-        } else {
-               webSocket.sendTXT(num, "SAFEOFF", strlen("SAFEOFF"));
-               } */
-        if (DST_MODE) {
-          webSocket.sendTXT(num, "TMZON", strlen("TMZON"));
-        } else {
-               webSocket.sendTXT(num, "TMZOFF", strlen("TMZOFF"));
-               }
-                      
-        char MSG[250];
-        //sprintf (MSG, "%03u,%03u,%03u,%01u,%01u,%01u,%01u,%01u,%s",TIME_COLOR_RGB[0],TIME_COLOR_RGB[1],TIME_COLOR_RGB[2],TIME_OFFSET,SHOUR,SMINUTE,EHOUR,EMINUTE,TZID.c_str());
-        sprintf (MSG, "%01u,%s,%s,%s",TIME_OFFSET,TZID.c_str(),IPLOC.c_str(),FLAG.c_str());
-        webSocket.sendTXT(num, MSG, strlen(MSG));
-
-      }
-      break;
-    case WStype_TEXT:
-      {
-
-      Serial.printf("[%u] get Text: %s\r\n", num, payload);
-      String text = String((char *) &payload[0]);
-      
-      if(text.startsWith("?")){
-        /*
-        String rVal=(text.substring(text.indexOf("r")+2,text.indexOf("g")-1)); 
-        int rInt = rVal.toInt();
-        //Serial.println(rInt);
-
-        String gVal=(text.substring(text.indexOf("g")+2,text.indexOf("b")-1)); 
-        int gInt = gVal.toInt();
-        //Serial.println(gInt);
-
-        String bVal=(text.substring(text.indexOf("b")+2,text.indexOf("n")-1)); 
-        int bInt = bVal.toInt();
-        //Serial.println(bInt);
-
-        String nVal=(text.substring(text.indexOf("n")+2,text.indexOf("t=")-1)); 
-        //Serial.println(nVal);
-
-        if (nVal == "true") {
-          NIXIE_MODE = true;
-        } else {
-                NIXIE_MODE = false;
-                }
-                
-        String tVal=(text.substring(text.indexOf("t=")+2,text.indexOf("d")-1)); 
-        //Serial.println(tVal);
-
-        if (tVal == "true") {
-          SLOTS_MODE = true;
-        } else {
-                SLOTS_MODE = false;
-                }
-
-        String dVal=(text.substring(text.indexOf("d")+2,text.indexOf("z")-1)); 
-        //Serial.println(dVal);
-
-        if (dVal == "true") {
-          SHOW_DATE = true;
-        } else {
-                SHOW_DATE = false;
-                }
-
-        String sVal=(text.substring(text.indexOf("s=")+2,text.indexOf("sh")-1));
-        //Serial.println(sVal);
-
-        if (sVal == "true") {
-          SAFE_MODE = true;
-        } else {
-                SAFE_MODE = false;
-                }
-
-        String shVal=(text.substring(text.indexOf("sh=")+3,text.indexOf("sm")-1));
-        SHOUR = shVal.toInt();
-        //Serial.println(shVal);
-        String smVal=(text.substring(text.indexOf("sm=")+3,text.indexOf("eh")-1));
-        SMINUTE = smVal.toInt();
-        //Serial.println(smVal);
-        String ehVal=(text.substring(text.indexOf("eh=")+3,text.indexOf("em")-1));
-        EHOUR = ehVal.toInt();
-        //Serial.println(ehVal);
-        String emVal=(text.substring(text.indexOf("em=")+3,text.indexOf("tz")-1));
-        EMINUTE = emVal.toInt();
-        //Serial.println(emVal);
-        */
-
-        String zVal=(text.substring(text.indexOf("z")+2,text.indexOf("tz=")-1));
-        TIME_OFFSET = zVal.toInt();
-        //Serial.println(zVal);
-
-        String tzVal=(text.substring(text.indexOf("tz=")+3,text.length()));
-        //Serial.println(tzVal);
-
-        if (tzVal == "true") {
-          DST_MODE = true;
-          //GETdst(LAT, LON);
-          TIME_OFFSET = DST_TIME_OFFSET;
-         // prevhour = hour();
-        } else {
-                DST_MODE = false;
-                }
-                
-        //NTP.setTimeZone(TIME_OFFSET);
-        
-        //EepromWrite();
-
-        char MSG[250];
-        //sprintf (MSG, "%03u,%03u,%03u,%01u,%01u,%01u,%01u,%01u,%s",TIME_COLOR_RGB[0],TIME_COLOR_RGB[1],TIME_COLOR_RGB[2],TIME_OFFSET,SHOUR,SMINUTE,EHOUR,EMINUTE,TZID.c_str());
-        sprintf (MSG, "%01u,%s,%s,%s",TIME_OFFSET,TZID.c_str(),IPLOC.c_str(),FLAG.c_str());
-        webSocket.sendTXT(num, MSG, strlen(MSG));
-
-       }
-      }
-      break;
-    case WStype_BIN:
-      {
-      Serial.printf("[%u] get binary length: %u\r\n", num, length);
-      hexdump(payload, length);
-
-      // echo data back to browser
-      webSocket.sendBIN(num, payload, length);
-      }
-      break;
-    default:
-      {
-      Serial.printf("Invalid WStype [%d]\r\n", type);
-      }
-      break;
-  }
-}
-
-void notFound(AsyncWebServerRequest *request) {
-    request->send(404, "text/plain", "Not found");
 }
