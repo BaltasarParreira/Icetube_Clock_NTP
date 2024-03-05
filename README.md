@@ -36,7 +36,7 @@ GND  ------------------------------->  GND
 
 RO (5V)  ---------------------------->  VIN
 
-RXD  ------------------------------->  TXD
+RXD  ------------------------------->  TXD1
 
 NOTE: If you use a ESP8266 model ESP-01 since as only one serial output you have to comment out from the code all Serial.print(ln) commands for information and debugging and change all "Serial1." --> to --> "Serial." !!!
 On this boards TXD pin will be as on this image the 2 --> GPIO1 --> UOTXD . Also you will need some sort of voltage regulator to drop the 5V from the clock to the 3.3V needed by this ESP or you can burn it.
